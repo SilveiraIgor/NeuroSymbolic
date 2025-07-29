@@ -31,8 +31,10 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
         self.essays = load_dataset("kamel-usp/aes_enem_dataset", "JBCS2025", cache_dir="/tmp/aes_enem", trust_remote_code=True)['train']
     elif split == "test":
         self.essays = load_dataset("kamel-usp/aes_enem_dataset", "JBCS2025", cache_dir="/tmp/aes_enem", trust_remote_code=True)['test']
-    elif split == "testsub":
+    elif split == "testsuba":
         self.essays = load_dataset("igorcs/C1-A", trust_remote_code=True)['test']
+    elif split == "testsubb":
+        self.essays = load_dataset("igorcs/C1-B", trust_remote_code=True)['test']
     else:
         self.essays =  self.essays = load_dataset("kamel-usp/aes_enem_dataset", "JBCS2025", cache_dir="/tmp/aes_enem", trust_remote_code=True)['validation']
 
@@ -101,10 +103,20 @@ def mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test):
     shuffle=True
   )
 
-  sub_loader = torch.utils.data.DataLoader(
+  sub_a_loader = torch.utils.data.DataLoader(
     MNISTSum2Dataset(
       data_dir,
-      split="testsub",
+      split="testsuba",
+      download=True,
+    ),
+    collate_fn=MNISTSum2Dataset.collate_fn,
+    batch_size=batch_size_test,
+    shuffle=True
+  )
+  sub_b_loader = torch.utils.data.DataLoader(
+    MNISTSum2Dataset(
+      data_dir,
+      split="testsubb",
       download=True,
     ),
     collate_fn=MNISTSum2Dataset.collate_fn,
@@ -113,19 +125,20 @@ def mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test):
   )
 
 
-  return train_loader, validation_loader, test_loader, sub_loader
+
+  return train_loader, validation_loader, [test_loader, sub_a_loader, sub_b_loader]
 
 
 class MNISTNet(nn.Module):
   def __init__(self):
     super(MNISTNet, self).__init__()
     self.sintaxe = AutoModelForSequenceClassification.from_pretrained(
-                "igorcs/Syntax-A",
+                "igorcs/Syntax-B",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=5,
             )
     self.desvios = AutoModelForSequenceClassification.from_pretrained(
-                "igorcs/Mistakes-A",
+                "igorcs/Mistakes-B",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=4,
             )
@@ -276,8 +289,8 @@ class Trainer():
           self.dic[f'y_{num_test}'] = [t.item() for t in y]
           self.dic[f'y_hat_{num_test}'] = [t.item() for t in y_hat]
     self.dic[f"loss_{stage}"] = test_loss
-    self.dic[f"{stage}_{num_test}_acc"] = perc.item()
-    self.dic[f"{stage}_{num_test}_qwk"] = QWK
+    self.dic[f"{stage}_acc"] = perc.item()
+    self.dic[f"{stage}_qwk"] = QWK
     #self.dic[f"concordancia_{stage}"] = self.medir_concordancia()
 
   def salvar_performance(self):
@@ -287,8 +300,10 @@ class Trainer():
   def train(self, n_epochs):
     self.test(0, "test-0")
     self.test(0, "test-1")
+    self.test(0, "test-2")
     self.salvar_performance()
     epoch = 1
+    #self.tolerance = 0
     while (self.tolerance > 0):
       self.train_epoch(epoch)
       self.test(epoch, "validation")
@@ -331,9 +346,9 @@ if __name__ == "__main__":
   data_dir = os.path.abspath(os.path.join(os.path.abspath(__file__), "../../data"))
 
   # Dataloaders
-  train_loader, validation_loader, test_loader, test_sub = mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test)
+  train_loader, validation_loader, test_loaders = mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test)
   # Create trainer and train
-  trainer = Trainer(train_loader, validation_loader, [test_loader,test_sub] , learning_rate, loss_fn, k, provenance)
+  trainer = Trainer(train_loader, validation_loader, test_loaders , learning_rate, loss_fn, k, provenance)
   trainer.train(n_epochs)
 
 
