@@ -162,7 +162,7 @@ class MNISTNet(nn.Module):
                 num_labels=6,
             )
     self.repetitions = AutoModelForSequenceClassification.from_pretrained(
-                "igorcs/Inadequacies-A",#"igorcs/Repetitions-A",
+                "igorcs/Repetitions-A",#"igorcs/Repetitions-A",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=5,
             )
