@@ -18,8 +18,8 @@ import scallopy
 
 TOKENIZER_NAME = f"neuralmind/bert-base-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
-TOLERANCE = 3
-nome_extra = "resumido_monorede_c1_addmult"
+TOLERANCE = 20
+nome_extra = "resumido_monorede_c1_addmult_allJ"
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 class MNISTSum2Dataset(torch.utils.data.Dataset):
   def __init__(
@@ -32,7 +32,7 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     self.split_name = split
     if split == "train":
         self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
-        self.essays = self._normalizar(self.essays)
+        self.essays = self._normalizar(self.essays).shuffle(seed=42)
     elif split == "test":
         self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
         self.essays = self._normalizar(self.essays)
@@ -51,12 +51,15 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
       lista_dic = []
       for idx, row in df.iterrows():
           identificacao = f"{row['id']}-{row['id_prompt']}"
-          for j in row['justificativa']:
+          for j in row['justificativa'][:]:
               dic = {}
               dic['id'] = identificacao
               dic['justificativa'] = j
+              #dic['justificativa'] = " ".join(row['justificativa'])
               dic['label'] = row['label']
               lista_dic.append(dic)
+      #print(lista_dic[:4])
+      #assert True == False
       return Dataset.from_list(lista_dic)
   def __len__(self):
      return len(self.essays)
@@ -79,6 +82,8 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
         if isinstance(self.essays[idx]['label'], str):
             label = eval(self.essays[idx]['label'])//40
         else:
+            #print("Caiu aqui")
+            #assert True == False
             label = self.essays[idx]['label']//40
     # Each data has two images and the GT is the sum of two digits
     return (tokenized_text, label)#(a_img, b_img, a_digit + b_digit)
@@ -265,7 +270,7 @@ class Trainer():
       most_common = Counter(lista).most_common(1)[0][0]
       return most_common
 
-  def majority_voting(self, y_hat, y, dataset):
+  def majority_voting(self, y, y_hat, dataset):
       assert len(y) == len(y_hat), "Listas de tamanhos diferentes no majority voting"
       majority_y = []
       majority_y_hat = []
@@ -298,7 +303,7 @@ class Trainer():
         #data, target = data.to(device), target#.to(device)
         output = self.network(data).cpu()
         for vetor in output:
-            if (sum(vetor) >1.02):
+            if (sum(vetor) >1.02) or (sum(vetor) < 0.98) :
                 print("Soma do vetor: ", sum(vetor))
                 assert True == False
         test_loss += self.loss(output, target).item()
@@ -308,20 +313,22 @@ class Trainer():
         correct += pred.eq(target.data.view_as(pred)).sum()
         perc = 100. * correct / num_items
         QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
-        iter.set_description(f"[{stage} Epoch {epoch}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
+        iter.set_description(f"[{stage} Epoch {epoch}/{epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
       y, y_hat = self.majority_voting(y, y_hat, dataset_using)
       #assert True == False
       QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
-      iter.set_description(f"[{stage} Epoch {epoch}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
+      print(QWK)
+      #iter.set_description(f"[{stage} Epoch {epoch}/{epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
       if (stage == "validation") and (QWK > self.melhor_QWK_valid):
           self.melhor_QWK_valid = QWK
           self.melhor_iteracao = epoch
           self.tolerance = TOLERANCE
-          print("Vou salvar esse modelo")
-          torch.save(self.network.mnist_net.state_dict(), 'RedeTreinada'+nome_extra+'.pth')
-          print("Modelo salvo")
+          print("Vou salvar esse modelo <<<<<<<<<<")
+          #torch.save(self.network.mnist_net.state_dict(), 'RedeTreinada'+nome_extra+'.pth')
+          #print(f"Modelo salvo e agora a tolerancia = {self.tolerance} e vai ate a epoch = {epoch+self.tolerance} " )
       if (stage == 'validation') and (self.melhor_iteracao != epoch) and (QWK <= self.melhor_QWK_valid):
           self.tolerance -= 1
+          #print(f"Agora ele tem mais {self.tolerance} chances")
       if (stage.startswith('test')) and (self.melhor_iteracao == epoch):
           self.dic[f'y_{num_test}'] = [t.item() for t in y]
           self.dic[f'y_hat_{num_test}'] = [t.item() for t in y_hat]
@@ -396,8 +403,6 @@ class Trainer():
     epoch = 1
     #self.tolerance = 0
     while (self.tolerance > 0):
-      if epoch == 10:
-          break
       self.train_epoch(epoch)
       self.test(epoch, "validation")
       for i in range(len(self.test_loader)):
@@ -405,7 +410,7 @@ class Trainer():
       epoch += 1
       self.salvar_performance()
     keys = self.lista_performances[1].keys()
-    nome_arquivo = 'performances_loaded_dois_berts'+nome_extra+'.csv'
+    nome_arquivo = 'performances_c1_'+nome_extra+'.csv'
     with open(nome_arquivo, 'w', newline='') as output_file:
         dict_writer = csv.DictWriter(output_file, keys)
         dict_writer.writeheader()
@@ -415,9 +420,9 @@ if __name__ == "__main__":
   # Argument parser
   parser = ArgumentParser("mnist_sum_2")
   parser.add_argument("--n-epochs", type=int, default=2)
-  parser.add_argument("--batch-size-train", type=int, default=8)
+  parser.add_argument("--batch-size-train", type=int, default=1)
   parser.add_argument("--batch-size-test", type=int, default=64)
-  parser.add_argument("--learning-rate", type=float, default=0.00001)
+  parser.add_argument("--learning-rate", type=float, default=0.000001)
   parser.add_argument("--loss-fn", type=str, default="bce")
   parser.add_argument("--seed", type=int, default=1234)
   parser.add_argument("--provenance", type=str, default="diffaddmultprob")

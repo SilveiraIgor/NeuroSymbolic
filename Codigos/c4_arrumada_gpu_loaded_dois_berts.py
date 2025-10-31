@@ -9,7 +9,7 @@ import torchvision
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
-from datasets import load_dataset, Dataset
+from datasets import load_dataset
 from argparse import ArgumentParser
 from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from tqdm import tqdm
@@ -18,8 +18,8 @@ import scallopy
 
 TOKENIZER_NAME = f"neuralmind/bert-base-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
-TOLERANCE = 20
-nome_extra = "resumido_c1_logic_addmult_allJ"
+TOLERANCE = 100
+nome_extra = f"_A_addmult_{TOLERANCE}-A2BA2"
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 class MNISTSum2Dataset(torch.utils.data.Dataset):
   def __init__(
@@ -31,34 +31,17 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     # Contains a MNIST dataset
     self.split_name = split
     if split == "train":
-        self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
-        self.essays = self._normalizar(self.essays)
+        self.essays = load_dataset("kamel-usp/aes_enem_dataset", "JBCS2025", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
     elif split == "test":
-        self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
-        self.essays = self._normalizar(self.essays)
+        self.essays = load_dataset("kamel-usp/aes_enem_dataset", "JBCS2025", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
     elif split in ["test-grade-suba", "test-sub-suba"]:
-        self.essays = load_dataset("igorcs/C1-A", trust_remote_code=True)['test']
+        self.essays = load_dataset("igorcs/C4-A", trust_remote_code=True)['test']
     elif split in ["test-grade-subb", "test-sub-subb"]:
-        self.essays = load_dataset("igorcs/C1-B", trust_remote_code=True)['test']
-    elif split == "resumido-api":
-        self.essays = load_dataset("igorcs/Sabia3ExtractorC1")['train']
+        self.essays = load_dataset("igorcs/C4-B", trust_remote_code=True)['test']
     else:
-        self.essays =  self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
-        self.essays = self._normalizar(self.essays)
+        self.essays =  self.essays = load_dataset("kamel-usp/aes_enem_dataset", "JBCS2025", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
 
-  def _normalizar(self, ds):
-      df = ds.to_pandas()
-      lista_dic = []
-      for idx, row in df.iterrows():
-          identificacao = f"{row['id']}-{row['id_prompt']}"
-          for j in row['justificativa'][:]:
-              dic = {}
-              dic['id'] = identificacao
-              #dic['justificativa'] = " ".join(row['justificativa'])
-              dic['justificativa'] = j
-              dic['label'] = row['label']
-              lista_dic.append(dic)
-      return Dataset.from_list(lista_dic)
+
   def __len__(self):
      return len(self.essays)
 
@@ -67,20 +50,19 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     #(a_img, a_digit) = self.mnist_dataset[self.index_map[idx * 2]]
     #(b_img, b_digit) = self.mnist_dataset[self.index_map[idx * 2 + 1]]
     tokenized_text = tokenizer(
-                self.essays[idx]["justificativa"],
+                self.essays[idx]["essay_text"],
                 return_tensors="pt",
                 truncation=True,
                 padding="max_length",
                 max_length=512
             )
-    #print( self.essays[idx]['justificativa'][0] )
     if self.split_name.startswith("test-sub-"):
-        label = (int(self.essays[idx]['syntax']), int(self.essays[idx]['mistakes']) )
+        label = (int(self.essays[idx]['cohesive']), int(self.essays[idx]['repetitions']), int(self.essays[idx]['inadequacies']), int(self.essays[idx]['monoblock']) )
     else:
-        if isinstance(self.essays[idx]['label'], str):
-            label = eval(self.essays[idx]['label'])//40
+        if isinstance(self.essays[idx]['grades'], str):
+            label = eval(self.essays[idx]['grades'])[3]//40
         else:
-            label = self.essays[idx]['label']//40
+            label = self.essays[idx]['grades'][3]//40
     # Each data has two images and the GT is the sum of two digits
     return (tokenized_text, label)#(a_img, b_img, a_digit + b_digit)
 
@@ -126,7 +108,7 @@ def mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test):
     batch_size=batch_size_test,
     shuffle=False
   )
-  """
+
   sub_a_loader = torch.utils.data.DataLoader(
     MNISTSum2Dataset(
       data_dir,
@@ -167,32 +149,48 @@ def mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test):
     batch_size=batch_size_test,
     shuffle=False
   )
-  """
-  return train_loader, validation_loader, [test_loader]#, sub_a_loader, sub_b_loader, sub_sub_a_loader, sub_sub_b_loader]
+
+  return train_loader, validation_loader, [test_loader, sub_a_loader, sub_b_loader, sub_sub_a_loader, sub_sub_b_loader]
 
 
 class MNISTNet(nn.Module):
   def __init__(self):
     super(MNISTNet, self).__init__()
-    self.sintaxe = AutoModelForSequenceClassification.from_pretrained(
-                "neuralmind/bert-base-portuguese-cased",
+    self.cohesive = AutoModelForSequenceClassification.from_pretrained(
+                "igorcs/Cohesive2-A",
+                cache_dir="/tmp/aes_enem2",
+                num_labels=6,
+            )
+    self.repetitions = AutoModelForSequenceClassification.from_pretrained(
+                "igorcs/Repetitions-B",#"igorcs/Repetitions-A",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=5,
             )
-    
-    self.desvios = AutoModelForSequenceClassification.from_pretrained( 
-                "neuralmind/bert-base-portuguese-cased",
+    self.inadequacies = AutoModelForSequenceClassification.from_pretrained(
+                "igorcs/Inadequacies2-A",
                 cache_dir="/tmp/aes_enem2",
-                num_labels=4,
+                num_labels=5,
+            )
+    self.monoblock = AutoModelForSequenceClassification.from_pretrained(
+                "igorcs/Monoblock-A",
+                cache_dir="/tmp/aes_enem2",
+                num_labels=2,
             )
 
   def forward(self, x):
-    output1 = self.sintaxe(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
-                        attention_mask=x[2].to(device))
-    output2 = self.desvios(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
-                        attention_mask=x[2].to(device))
-
-    return (F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1))
+    x = list(x)
+    x[0] = x[0].to(device)
+    x[1] = x[1].to(device)
+    x[2] = x[2].to(device)
+    output1 = self.cohesive(input_ids=x[0], token_type_ids=x[1], 
+                        attention_mask=x[2])
+    output2 = self.repetitions(input_ids=x[0], token_type_ids=x[1], 
+                        attention_mask=x[2])
+    output3 = self.inadequacies(input_ids=x[0], token_type_ids=x[1], 
+                        attention_mask=x[2])
+    output4 = self.monoblock(input_ids=x[0], token_type_ids=x[1], 
+                        attention_mask=x[2])
+    return (F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1), F.softmax(output3.logits, dim=1), F.softmax(output4.logits,dim=1) )
 
 
 class MNISTSum2Net(nn.Module):
@@ -201,47 +199,59 @@ class MNISTSum2Net(nn.Module):
 
     # MNIST Digit Recognition Network
     self.mnist_net = MNISTNet()
-    self.resps_A = []
-    self.resps_B = []
+    self.resps_cohesive = []
+    self.resps_repetitions = []
+    self.resps_inadequacies = []
+    self.resps_monoblock = []
 
     # Scallop Context
     self.scl_ctx = scallopy.ScallopContext(provenance=provenance, k=k)
-    self.scl_ctx.add_relation("digit_1", int, input_mapping=list(range(5)))
-    self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(4)))
+    self.scl_ctx.add_relation("cohesive", int, input_mapping=list(range(6)))
+    self.scl_ctx.add_relation("repetitions", int, input_mapping=list(range(5)))
+    self.scl_ctx.add_relation("inadequacies", int, input_mapping=list(range(5)))
+    self.scl_ctx.add_relation("monoblock", int, input_mapping=list(range(2)))
     #self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(10)))
-    self.scl_ctx.add_rule("sum_2(0) :- digit_1(0)")
-    self.scl_ctx.add_rule("sum_2(1) :- digit_1(1), digit_2(0)")
-    #soma2
-    self.scl_ctx.add_rule("sum_2(2) :- digit_1(1), digit_2(b), b>=1")
-    self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
-    #self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
-    #soma3
-    self.scl_ctx.add_rule("sum_2(3) :- digit_1(2), digit_2(b), b>=1")
-    self.scl_ctx.add_rule("sum_2(3) :- digit_1(a), digit_2(1), a>=3")
-    #self.scl_ctx.add_rule("sum_2(3) :- digit_1(a), digit_2(1), a>=2")
-    #soma4
-    self.scl_ctx.add_rule("sum_2(4) :- digit_1(3), digit_2(b), b>=2")
-    self.scl_ctx.add_rule("sum_2(4) :- digit_1(a), digit_2(2), a>=4")
-    #self.scl_ctx.add_rule("sum_2(4) :- digit_1(a), digit_2(2), a>=3")
-    #soma5
-    self.scl_ctx.add_rule("sum_2(5) :- digit_1(4), digit_2(3)")
+    self.scl_ctx.add_rule("nota(0) :- cohesive(0)")
+    #arrumando a 1
+    self.scl_ctx.add_rule("nota(1) :- cohesive(1), repetitions(b), inadequacies(c), b>=0, c>=0")
+    self.scl_ctx.add_rule("nota(1) :- cohesive(a), repetitions(0), inadequacies(c), a>=2, c>=0")
+    self.scl_ctx.add_rule("nota(1) :- cohesive(a), repetitions(b), inadequacies(0), a>=2, b>=1")
+
+    self.scl_ctx.add_rule("nota(2) :- cohesive(2), repetitions(b), inadequacies(c), b>=1, c>=1")
+    self.scl_ctx.add_rule("nota(2) :- cohesive(a), repetitions(1), inadequacies(c), a>=3, c>=1")
+    self.scl_ctx.add_rule("nota(2) :- cohesive(a), repetitions(b), inadequacies(1), a>=3, b>=2")
+    self.scl_ctx.add_rule("nota(2) :- cohesive(a), repetitions(b), inadequacies(c), monoblock(0), a>=3, b>=2, c>=2")
+
+    self.scl_ctx.add_rule("nota(3) :- cohesive(3), repetitions(b), inadequacies(c), monoblock(1), b>=2, c>=2")
+    self.scl_ctx.add_rule("nota(3) :- cohesive(a), repetitions(2), inadequacies(c), monoblock(1), a>=4, c>=2")
+    self.scl_ctx.add_rule("nota(3) :- cohesive(a), repetitions(b), inadequacies(2), monoblock(1), a>=4, b>=3")
+
+    self.scl_ctx.add_rule("nota(4) :- cohesive(4), repetitions(b), inadequacies(c), monoblock(1), b>=3, c>=3")
+    self.scl_ctx.add_rule("nota(4) :- cohesive(a), repetitions(3), inadequacies(c), monoblock(1), a>=5, c>=3")
+    self.scl_ctx.add_rule("nota(4) :- cohesive(a), repetitions(b), inadequacies(3), monoblock(1), a>=5, b>=4")
+    
+    self.scl_ctx.add_rule("nota(5) :- cohesive(5), repetitions(4), inadequacies(4), monoblock(1)")
     # The `sum_2` logical reasoning module
-    self.sum_2 = self.scl_ctx.forward_function("sum_2", output_mapping=[(i,) for i in range(6)])
+    self.sum_2 = self.scl_ctx.forward_function("nota", output_mapping=[(i,) for i in range(6)])
 
   def forward(self, x: Tuple[torch.Tensor, torch.Tensor]):
     texto = x
     # First recognize the two digits
-    resposta_a, resposta_b = self.mnist_net(texto) # Tensor 64 x 10
-    self.resps_A.extend(resposta_a)
-    self.resps_B.extend(resposta_b)
+    resposta_a, resposta_b, resposta_c, resposta_d = self.mnist_net(texto) # Tensor
+    self.resps_cohesive.extend(resposta_a)
+    self.resps_repetitions.extend(resposta_b)
+    self.resps_inadequacies.extend(resposta_c)
+    self.resps_monoblock.extend(resposta_d)
     #b_distrs = self.mnist_net(b_imgs) # Tensor 64 x 10
 
     # Then execute the reasoning module; the result is a size 19 tensor
-    return self.sum_2(digit_1=resposta_a, digit_2=resposta_b)#, digit_2=b_distrs) # Tensor 64 x 19
+    return self.sum_2(cohesive=resposta_a, repetitions=resposta_b, inadequacies=resposta_c, monoblock=resposta_d)#, digit_2=b_distrs) # Tensor 64 x 19
 
   def reset_memory(self):
-      self.resps_A = []
-      self.resps_B = []
+      self.resps_cohesive = []
+      self.resps_repetitions = []
+      self.resps_inadequacies = []
+      self.resps_monoblock = []
 
 
 def bce_loss(output, ground_truth):
@@ -287,42 +297,6 @@ class Trainer():
       self.optimizer.step()
       iter.set_description(f"[Train Epoch {epoch}] Loss: {loss.item():.4f}")
     self.dic['loss_train'] = loss.item()
-    self.dic['concodancia_train'] = self.medir_concordancia()
-
-
-  def medir_concordancia(self):
-    resp_A = self.network.resps_A#[0].max(dim=1, keepdim=False)[1]
-    resp_B = self.network.resps_B#[0].max(dim=1, keepdim=False)[1]
-    args_A = torch.tensor([t.argmax() for t in resp_A])
-    args_B = torch.tensor([t.argmax() for t in resp_B])
-    iguais = (args_A == args_B).sum().item()
-    print( f"Total de concordancias: {iguais}/{len(args_A)} ({iguais/len(args_A):.2f})" )
-    return iguais/len(args_A)
-
-  def find_most_common(self, lista):
-      most_common = Counter(lista).most_common(1)[0][0]
-      return most_common
-
-  def majority_voting(self, y_hat, y, dataset):
-      assert len(y) == len(y_hat), "Listas de tamanhos diferentes no majority voting"
-      majority_y = []
-      majority_y_hat = []
-      id_anterior = dataset.dataset.essays[0]['id']
-      lista_indices = [] 
-      for index, i in enumerate(dataset.dataset.essays):
-          if i['id'] != id_anterior:
-              lista_indices.append(index)
-              id_anterior = i['id']
-      lista_indices.append(len(dataset.dataset.essays))
-      lista_indices.insert(0, 0)
-      for indice in range(len(lista_indices)-1):
-          indice1 = lista_indices[indice]
-          indice2 = lista_indices[indice+1]
-          majority_y.append( self.find_most_common(y[indice1:indice2])  )
-          majority_y_hat.append( self.find_most_common(y_hat[indice1:indice2])  )
-      assert len(majority_y) == len(majority_y_hat), "Majorities sairam diferentes"
-      return majority_y, majority_y_hat
-      
 
   def test_whole_network(self, dataset_using, epoch, stage, num_test):
     num_items = len(dataset_using.dataset)
@@ -336,9 +310,8 @@ class Trainer():
         #data, target = data.to(device), target#.to(device)
         output = self.network(data).cpu()
         for vetor in output:
-            if (sum(vetor) >1.02) or (sum(vetor)<0.98):
-                print("Soma do vetor: ", sum(vetor))
-                assert True == False
+            if (sum(vetor) >= 1.02) or (sum(vetor) <= 0.98):
+                assert True == False, f"Vetor {vetor} somando {sum(vetor)}"
         test_loss += self.loss(output, target).item()
         pred = output.data.max(1, keepdim=True)[1]
         y.extend(torch.flatten(target).numpy())
@@ -346,17 +319,13 @@ class Trainer():
         correct += pred.eq(target.data.view_as(pred)).sum()
         perc = 100. * correct / num_items
         QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
-        iter.set_description(f"[{stage} Epoch {epoch}/ {epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
-      y, y_hat = self.majority_voting(y, y_hat, dataset_using)
-      #assert True == False
-      QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
-      print(f"QWK: {QWK:.2f}")
+        iter.set_description(f"[{stage} Epoch {epoch}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
       if (stage == "validation") and (QWK > self.melhor_QWK_valid):
           self.melhor_QWK_valid = QWK
           self.melhor_iteracao = epoch
           self.tolerance = TOLERANCE
-          print("Vou salvar esse modelo<<<<<<<<<<<<<<<")
-          #torch.save(self.network.mnist_net.state_dict(), 'RedeTreinada'+nome_extra+'.pth')
+          print("Vou salvar esse modelo")
+          torch.save(self.network.mnist_net.state_dict(), 'RedeTreinada_C4'+nome_extra+'.pth')
           print("Modelo salvo")
       if (stage == 'validation') and (self.melhor_iteracao != epoch) and (QWK <= self.melhor_QWK_valid):
           self.tolerance -= 1
@@ -367,12 +336,29 @@ class Trainer():
     self.dic[f"{stage}_acc"] = perc.item()
     self.dic[f"{stage}_qwk"] = QWK
 
+  def testar_listas(self, l1, l2):
+    elemento1 = l1[0]
+    l1_igual = True
+    for e in l1:
+        if e != elemento1:
+            l1_igual = False
+            break
+    elemento2 = l2[0]
+    l2_igual = True
+    for e in l2:
+        if e != elemento2:
+            l2_igual = False
+            break
+    if l1_igual and l2_igual and elemento1 == elemento2:
+        return False
+    else:
+        return True
   def test_sub_network(self, dataset_using, epoch, stage, num_test):
     num_items = len(dataset_using.dataset)
     test_loss = 0
     correct = 0
-    y_0, y_1 = [], []
-    y_hat_0, y_hat_1 = [], []
+    y_0, y_1, y_2, y_3 = [], [], [], []
+    y_hat_0, y_hat_1, y_hat_2, y_hat_3 = [], [], [], []
     with torch.no_grad():
       iter = tqdm(dataset_using, total=len(dataset_using))
       for (data, target) in iter:
@@ -384,23 +370,63 @@ class Trainer():
         for idx, vetor2 in enumerate(output[1]):
             pred1 = vetor2.max(0, keepdim=True)[1]
             y_hat_1.append(pred1.item())
-        y_0.extend([a.item() for a,_ in target])
-        y_1.extend([a.item() for _,a in target])
+        for idx, vetor3 in enumerate(output[2]):
+            pred2 = vetor3.max(0, keepdim=True)[1]
+            y_hat_2.append(pred2.item())
+        for idx, vetor4 in enumerate(output[3]):
+            pred3 = vetor4.max(0, keepdim=True)[1]
+            y_hat_3.append(pred3.item())
+        y_0.extend([a.item() for a,_,_,_ in target])
+        y_1.extend([a.item() for _,a,_,_ in target])
+        y_2.extend([a.item() for _,_,a,_ in target])
+        y_3.extend([a.item() for _,_,_,a in target])
+        #print("Y_0:", y_0)
+        #print("Y_hat_0:", y_hat_0)
+        #print("Y_1:", y_1)
+        #print("Y_hat_1:", y_hat_1)
+        #print("Y_2:", y_2)
+        #print("Y_hat_2:", y_hat_2)
+        #print("Y_3:", y_3)
+        #print("Y_hat_3:", y_hat_3)
         perc_0 = accuracy_score(y_0, y_hat_0)*100
+        #print("Computei o ACC0")
         perc_1 = accuracy_score(y_1, y_hat_1)*100
+        #print("Computei o ACC1")
+        perc_2 = accuracy_score(y_2, y_hat_2)*100
+        #print("Computei o ACC2")
+        perc_3 = accuracy_score(y_3, y_hat_3)*100
+        #print("Computei o ACC3")
         QWK_0 = cohen_kappa_score(y_0, y_hat_0, weights='quadratic', labels=[0,1,2,3,4,5])
-        QWK_1 = cohen_kappa_score(y_1, y_hat_1, weights='quadratic', labels=[0,1,2,3,4,5])
-        iter.set_description(f"[{stage} Epoch {epoch}] Total loss: {test_loss:.4f}, Accuracy:({perc_0:.2f}, {perc_1:.2f})  QWK: {QWK_0:.2f}, {QWK_1:.2f}")
+        #print("foi o 0")
+        QWK_1 = cohen_kappa_score(y_1, y_hat_1, weights='quadratic', labels=[0,1,2,3,4])
+        #print("foi o 1")
+        QWK_2 = cohen_kappa_score(y_2, y_hat_2, weights='quadratic', labels=[0,1,2,3,4])
+        #print("foi o 2")
+        if self.testar_listas(y_3, y_hat_3):
+            QWK_3 = cohen_kappa_score(y_3, y_hat_3, weights='quadratic', labels=[0,1])
+        else:
+            QWK_3 = 1.0
+        #print("erro foi no 3")
+        #assert True == False
+        iter.set_description(f"[{stage} Epoch {epoch}/{epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy:({perc_0:.2f}, {perc_1:.2f}, {perc_2:.2f}, {perc_3:.2f})  QWK: {QWK_0:.2f}, {QWK_1:.2f}, {QWK_2}, {QWK_3}")
       if (stage.startswith('test')) and (self.melhor_iteracao == epoch):
-          self.dic[f'y_{num_test}_syntax'] = y_0
-          self.dic[f'y_{num_test}_mistake'] = y_1
-          self.dic[f'y_hat_{num_test}_syntax'] = y_hat_0
-          self.dic[f'y_hat_{num_test}_mistake'] = y_hat_1
+          self.dic[f'y_{num_test}_cohesive'] = y_0
+          self.dic[f'y_{num_test}_repetitions'] = y_1
+          self.dic[f'y_{num_test}_inadequacies'] = y_2
+          self.dic[f'y_{num_test}_monoblock'] = y_3
+          self.dic[f'y_hat_{num_test}_cohesive'] = y_hat_0
+          self.dic[f'y_hat_{num_test}_repetitions'] = y_hat_1
+          self.dic[f'y_hat_{num_test}_inadequacies'] = y_hat_2
+          self.dic[f'y_hat_{num_test}_monoblock'] = y_hat_3
     self.dic[f"loss_{stage}"] = test_loss
-    self.dic[f"{stage}_acc_syntax"] = perc_0
-    self.dic[f"{stage}_acc_mistakes"] = perc_1
-    self.dic[f"{stage}_qwk_syntax"] = QWK_0
-    self.dic[f"{stage}_qwk_mistakes"] = QWK_1
+    self.dic[f"{stage}_acc_cohesive"] = perc_0
+    self.dic[f"{stage}_acc_repetitions"] = perc_1
+    self.dic[f"{stage}_acc_inadequacies"] = perc_2
+    self.dic[f"{stage}_acc_monoblock"] = perc_3
+    self.dic[f"{stage}_qwk_cohesive"] = QWK_0
+    self.dic[f"{stage}_qwk_repetitions"] = QWK_1
+    self.dic[f"{stage}_qwk_inadequacies"] = QWK_2
+    self.dic[f"{stage}_qwk_monoblock"] = QWK_3
 
 
   def test(self, epoch, stage):
@@ -426,10 +452,10 @@ class Trainer():
 
   def train(self, n_epochs):
     self.test(0, "test-0")
-    #self.test(0, "test-1")
-    #self.test(0, "test-2")
-    #self.test(0, "test-3")
-    #self.test(0, "test-4")
+    self.test(0, "test-1")
+    self.test(0, "test-2")
+    self.test(0, "test-3")
+    self.test(0, "test-4")
     self.salvar_performance()
     epoch = 1
     #self.tolerance = 0
@@ -441,7 +467,7 @@ class Trainer():
       epoch += 1
       self.salvar_performance()
     keys = self.lista_performances[1].keys()
-    nome_arquivo = 'performances_loaded_dois_berts'+nome_extra+'.csv'
+    nome_arquivo = 'performances_loaded_dois_berts_c4'+nome_extra+'.csv'
     with open(nome_arquivo, 'w', newline='') as output_file:
         dict_writer = csv.DictWriter(output_file, keys)
         dict_writer.writeheader()
@@ -452,8 +478,8 @@ if __name__ == "__main__":
   parser = ArgumentParser("mnist_sum_2")
   parser.add_argument("--n-epochs", type=int, default=2)
   parser.add_argument("--batch-size-train", type=int, default=1)
-  parser.add_argument("--batch-size-test", type=int, default=64)
-  parser.add_argument("--learning-rate", type=float, default=0.000001)
+  parser.add_argument("--batch-size-test", type=int, default=1)
+  parser.add_argument("--learning-rate", type=float, default=0.00001)
   parser.add_argument("--loss-fn", type=str, default="bce")
   parser.add_argument("--seed", type=int, default=1234)
   parser.add_argument("--provenance", type=str, default="diffaddmultprob")
@@ -477,7 +503,6 @@ if __name__ == "__main__":
   # Dataloaders
   train_loader, validation_loader, test_loaders = mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test)
   # Create trainer and train
-  #print(validation_loader.dataset.essays)
   trainer = Trainer(train_loader, validation_loader, test_loaders , learning_rate, loss_fn, k, provenance)
   trainer.train(n_epochs)
 

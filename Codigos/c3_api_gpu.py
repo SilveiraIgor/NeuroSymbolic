@@ -19,7 +19,7 @@ import scallopy
 TOKENIZER_NAME = f"neuralmind/bert-base-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 TOLERANCE = 20
-nome_extra = "resumido_c1_logic_addmult_allJ"
+nome_extra = "_resumido_addmult_concatJ"
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 class MNISTSum2Dataset(torch.utils.data.Dataset):
   def __init__(
@@ -31,10 +31,10 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     # Contains a MNIST dataset
     self.split_name = split
     if split == "train":
-        self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
+        self.essays = load_dataset("igorcs/LLM-C3-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
         self.essays = self._normalizar(self.essays)
     elif split == "test":
-        self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
+        self.essays = load_dataset("igorcs/LLM-C3-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
         self.essays = self._normalizar(self.essays)
     elif split in ["test-grade-suba", "test-sub-suba"]:
         self.essays = load_dataset("igorcs/C1-A", trust_remote_code=True)['test']
@@ -43,7 +43,7 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     elif split == "resumido-api":
         self.essays = load_dataset("igorcs/Sabia3ExtractorC1")['train']
     else:
-        self.essays =  self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
+        self.essays =  self.essays = load_dataset("igorcs/LLM-C3-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
         self.essays = self._normalizar(self.essays)
 
   def _normalizar(self, ds):
@@ -51,10 +51,10 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
       lista_dic = []
       for idx, row in df.iterrows():
           identificacao = f"{row['id']}-{row['id_prompt']}"
-          for j in row['justificativa'][:]:
+          for j in row['justificativa'][:1]:
               dic = {}
               dic['id'] = identificacao
-              #dic['justificativa'] = " ".join(row['justificativa'])
+              dic['justificativa'] = " ".join(row['justificativa'])
               dic['justificativa'] = j
               dic['label'] = row['label']
               lista_dic.append(dic)
@@ -174,25 +174,44 @@ def mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test):
 class MNISTNet(nn.Module):
   def __init__(self):
     super(MNISTNet, self).__init__()
-    self.sintaxe = AutoModelForSequenceClassification.from_pretrained(
+    #self.direcao = AutoModelForSequenceClassification.from_pretrained(
+    #            "neuralmind/bert-base-portuguese-cased",
+    #            cache_dir="/tmp/aes_enem2",
+    #            num_labels=2,
+    #        )
+    
+    self.projeto = AutoModelForSequenceClassification.from_pretrained( 
                 "neuralmind/bert-base-portuguese-cased",
                 cache_dir="/tmp/aes_enem2",
-                num_labels=5,
+                num_labels=6,
             )
-    
-    self.desvios = AutoModelForSequenceClassification.from_pretrained( 
+
+    self.desenvolvimento = AutoModelForSequenceClassification.from_pretrained( 
                 "neuralmind/bert-base-portuguese-cased",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=4,
             )
 
-  def forward(self, x):
-    output1 = self.sintaxe(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
-                        attention_mask=x[2].to(device))
-    output2 = self.desvios(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
-                        attention_mask=x[2].to(device))
+    self.contradicao = AutoModelForSequenceClassification.from_pretrained( 
+                "neuralmind/bert-base-portuguese-cased",
+                cache_dir="/tmp/aes_enem2",
+                num_labels=2,
+            )
 
-    return (F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1))
+  def forward(self, x):
+    #output1 = self.direcao(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+    #                    attention_mask=x[2].to(device))
+    output2 = self.projeto(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+                        attention_mask=x[2].to(device))
+    output3 = self.desenvolvimento(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+                        attention_mask=x[2].to(device))
+    output4 = self.contradicao(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+                        attention_mask=x[2].to(device))
+     
+    #print( F.softmax(output2.logits, dim=1), F.softmax(output3.logits, dim=1), F.softmax(output4.logits, dim=1))
+    return ( #F.softmax(output1.logits, dim=1),
+            F.softmax(output2.logits, dim=1),
+             F.softmax(output3.logits, dim=1), F.softmax(output4.logits, dim=1))
 
 
 class MNISTSum2Net(nn.Module):
@@ -206,38 +225,40 @@ class MNISTSum2Net(nn.Module):
 
     # Scallop Context
     self.scl_ctx = scallopy.ScallopContext(provenance=provenance, k=k)
-    self.scl_ctx.add_relation("digit_1", int, input_mapping=list(range(5)))
-    self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(4)))
+    #self.scl_ctx.add_relation("direcao", int, input_mapping=list(range(2)))
+    self.scl_ctx.add_relation("projeto", int, input_mapping=list(range(6)))
+    self.scl_ctx.add_relation("desenvolvimento", int, input_mapping=list(range(4)))
+    self.scl_ctx.add_relation("contradicao", int, input_mapping=list(range(2)))
+    #self.scl_ctx.add_relation("produtivo", int, input_mapping=list(range(2)))
     #self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(10)))
-    self.scl_ctx.add_rule("sum_2(0) :- digit_1(0)")
-    self.scl_ctx.add_rule("sum_2(1) :- digit_1(1), digit_2(0)")
+    self.scl_ctx.add_rule("nota(0) :- projeto(0)")
+    self.scl_ctx.add_rule("nota(1) :- projeto(1)")
     #soma2
-    self.scl_ctx.add_rule("sum_2(2) :- digit_1(1), digit_2(b), b>=1")
-    self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
-    #self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
+    self.scl_ctx.add_rule("nota(2) :- projeto(2), desenvolvimento(b), b>=0")
+    self.scl_ctx.add_rule("nota(2) :- projeto(a), desenvolvimento(0), a>=3")
+    self.scl_ctx.add_rule("nota(2) :- projeto(a), desenvolvimento(b), contradicao(1), a>=3, b>=1")
     #soma3
-    self.scl_ctx.add_rule("sum_2(3) :- digit_1(2), digit_2(b), b>=1")
-    self.scl_ctx.add_rule("sum_2(3) :- digit_1(a), digit_2(1), a>=3")
-    #self.scl_ctx.add_rule("sum_2(3) :- digit_1(a), digit_2(1), a>=2")
+    self.scl_ctx.add_rule("nota(3) :- projeto(3), desenvolvimento(b), b>=1, contradicao(0)")
+    self.scl_ctx.add_rule("nota(3) :- projeto(a), desenvolvimento(1), a>=4, contradicao(0)") 
     #soma4
-    self.scl_ctx.add_rule("sum_2(4) :- digit_1(3), digit_2(b), b>=2")
-    self.scl_ctx.add_rule("sum_2(4) :- digit_1(a), digit_2(2), a>=4")
-    #self.scl_ctx.add_rule("sum_2(4) :- digit_1(a), digit_2(2), a>=3")
+    self.scl_ctx.add_rule("nota(4) :- projeto(4), desenvolvimento(b), b>=2, contradicao(0)") 
+    self.scl_ctx.add_rule("nota(4) :- projeto(a), desenvolvimento(2), a>=5, contradicao(0)") 
     #soma5
-    self.scl_ctx.add_rule("sum_2(5) :- digit_1(4), digit_2(3)")
+    self.scl_ctx.add_rule("nota(5) :- projeto(5), desenvolvimento(3), contradicao(0)") 
     # The `sum_2` logical reasoning module
-    self.sum_2 = self.scl_ctx.forward_function("sum_2", output_mapping=[(i,) for i in range(6)])
+    self.sum_2 = self.scl_ctx.forward_function("nota", output_mapping=[(i,) for i in range(6)])
 
   def forward(self, x: Tuple[torch.Tensor, torch.Tensor]):
     texto = x
     # First recognize the two digits
-    resposta_a, resposta_b = self.mnist_net(texto) # Tensor 64 x 10
+    resposta_a, resposta_b, resposta_c = self.mnist_net(texto) # Tensor 64 x 10
     self.resps_A.extend(resposta_a)
     self.resps_B.extend(resposta_b)
     #b_distrs = self.mnist_net(b_imgs) # Tensor 64 x 10
 
     # Then execute the reasoning module; the result is a size 19 tensor
-    return self.sum_2(digit_1=resposta_a, digit_2=resposta_b)#, digit_2=b_distrs) # Tensor 64 x 19
+    return self.sum_2(projeto=resposta_a, desenvolvimento=resposta_b,
+                      contradicao=resposta_c)#, digit_2=b_distrs) # Tensor 64 x 19
 
   def reset_memory(self):
       self.resps_A = []
@@ -277,14 +298,15 @@ class Trainer():
     self.dic['epoca'] = epoch
     self.network.train()
     self.network.reset_memory()
+    self.optimizer.zero_grad()
     iter = tqdm(self.train_loader, total=len(self.train_loader))
     for (data, target) in iter:
       #target = target.to(device)
-      self.optimizer.zero_grad()
       output = self.network(data).cpu()
       loss = self.loss(output, target)
       loss.backward()
       self.optimizer.step()
+      self.optimizer.zero_grad()
       iter.set_description(f"[Train Epoch {epoch}] Loss: {loss.item():.4f}")
     self.dic['loss_train'] = loss.item()
     self.dic['concodancia_train'] = self.medir_concordancia()
@@ -338,7 +360,7 @@ class Trainer():
         for vetor in output:
             if (sum(vetor) >1.02) or (sum(vetor)<0.98):
                 print("Soma do vetor: ", sum(vetor))
-                assert True == False
+                assert True == False, f"Soma do vetor deu errado: {vetor}"
         test_loss += self.loss(output, target).item()
         pred = output.data.max(1, keepdim=True)[1]
         y.extend(torch.flatten(target).numpy())
@@ -441,7 +463,7 @@ class Trainer():
       epoch += 1
       self.salvar_performance()
     keys = self.lista_performances[1].keys()
-    nome_arquivo = 'performances_loaded_dois_berts'+nome_extra+'.csv'
+    nome_arquivo = 'performances_c3_logic'+nome_extra+'.csv'
     with open(nome_arquivo, 'w', newline='') as output_file:
         dict_writer = csv.DictWriter(output_file, keys)
         dict_writer.writeheader()
@@ -452,7 +474,7 @@ if __name__ == "__main__":
   parser = ArgumentParser("mnist_sum_2")
   parser.add_argument("--n-epochs", type=int, default=2)
   parser.add_argument("--batch-size-train", type=int, default=1)
-  parser.add_argument("--batch-size-test", type=int, default=64)
+  parser.add_argument("--batch-size-test", type=int, default=1)
   parser.add_argument("--learning-rate", type=float, default=0.000001)
   parser.add_argument("--loss-fn", type=str, default="bce")
   parser.add_argument("--seed", type=int, default=1234)

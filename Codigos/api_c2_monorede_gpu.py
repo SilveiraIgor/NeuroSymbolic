@@ -19,7 +19,7 @@ import scallopy
 TOKENIZER_NAME = f"neuralmind/bert-base-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 TOLERANCE = 20
-nome_extra = "resumido_c1_logic_addmult_allJ"
+nome_extra = "resumido_monorede_c2_addmult_all_J"
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 class MNISTSum2Dataset(torch.utils.data.Dataset):
   def __init__(
@@ -31,10 +31,10 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     # Contains a MNIST dataset
     self.split_name = split
     if split == "train":
-        self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
-        self.essays = self._normalizar(self.essays)
+        self.essays = load_dataset("igorcs/LLM-C2-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
+        self.essays = self._normalizar(self.essays).shuffle(seed=42)
     elif split == "test":
-        self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
+        self.essays = load_dataset("igorcs/LLM-C2-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
         self.essays = self._normalizar(self.essays)
     elif split in ["test-grade-suba", "test-sub-suba"]:
         self.essays = load_dataset("igorcs/C1-A", trust_remote_code=True)['test']
@@ -43,7 +43,7 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     elif split == "resumido-api":
         self.essays = load_dataset("igorcs/Sabia3ExtractorC1")['train']
     else:
-        self.essays =  self.essays = load_dataset("igorcs/LLM-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
+        self.essays =  self.essays = load_dataset("igorcs/LLM-C2-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
         self.essays = self._normalizar(self.essays)
 
   def _normalizar(self, ds):
@@ -58,6 +58,8 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
               dic['justificativa'] = j
               dic['label'] = row['label']
               lista_dic.append(dic)
+      #print(lista_dic[:4])
+      #assert True == False
       return Dataset.from_list(lista_dic)
   def __len__(self):
      return len(self.essays)
@@ -80,6 +82,8 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
         if isinstance(self.essays[idx]['label'], str):
             label = eval(self.essays[idx]['label'])//40
         else:
+            #print("Caiu aqui")
+            #assert True == False
             label = self.essays[idx]['label']//40
     # Each data has two images and the GT is the sum of two digits
     return (tokenized_text, label)#(a_img, b_img, a_digit + b_digit)
@@ -177,22 +181,14 @@ class MNISTNet(nn.Module):
     self.sintaxe = AutoModelForSequenceClassification.from_pretrained(
                 "neuralmind/bert-base-portuguese-cased",
                 cache_dir="/tmp/aes_enem2",
-                num_labels=5,
+                num_labels=6,
             )
     
-    self.desvios = AutoModelForSequenceClassification.from_pretrained( 
-                "neuralmind/bert-base-portuguese-cased",
-                cache_dir="/tmp/aes_enem2",
-                num_labels=4,
-            )
-
   def forward(self, x):
     output1 = self.sintaxe(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
                         attention_mask=x[2].to(device))
-    output2 = self.desvios(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
-                        attention_mask=x[2].to(device))
 
-    return (F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1))
+    return F.softmax(output1.logits, dim=1)
 
 
 class MNISTSum2Net(nn.Module):
@@ -206,38 +202,20 @@ class MNISTSum2Net(nn.Module):
 
     # Scallop Context
     self.scl_ctx = scallopy.ScallopContext(provenance=provenance, k=k)
-    self.scl_ctx.add_relation("digit_1", int, input_mapping=list(range(5)))
-    self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(4)))
+    self.scl_ctx.add_relation("digit_1", int, input_mapping=list(range(6)))
     #self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(10)))
-    self.scl_ctx.add_rule("sum_2(0) :- digit_1(0)")
-    self.scl_ctx.add_rule("sum_2(1) :- digit_1(1), digit_2(0)")
-    #soma2
-    self.scl_ctx.add_rule("sum_2(2) :- digit_1(1), digit_2(b), b>=1")
-    self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
-    #self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
-    #soma3
-    self.scl_ctx.add_rule("sum_2(3) :- digit_1(2), digit_2(b), b>=1")
-    self.scl_ctx.add_rule("sum_2(3) :- digit_1(a), digit_2(1), a>=3")
-    #self.scl_ctx.add_rule("sum_2(3) :- digit_1(a), digit_2(1), a>=2")
-    #soma4
-    self.scl_ctx.add_rule("sum_2(4) :- digit_1(3), digit_2(b), b>=2")
-    self.scl_ctx.add_rule("sum_2(4) :- digit_1(a), digit_2(2), a>=4")
-    #self.scl_ctx.add_rule("sum_2(4) :- digit_1(a), digit_2(2), a>=3")
-    #soma5
-    self.scl_ctx.add_rule("sum_2(5) :- digit_1(4), digit_2(3)")
+    self.scl_ctx.add_rule("sum_2(x) :- digit_1(x)")
     # The `sum_2` logical reasoning module
     self.sum_2 = self.scl_ctx.forward_function("sum_2", output_mapping=[(i,) for i in range(6)])
 
   def forward(self, x: Tuple[torch.Tensor, torch.Tensor]):
     texto = x
     # First recognize the two digits
-    resposta_a, resposta_b = self.mnist_net(texto) # Tensor 64 x 10
+    resposta_a = self.mnist_net(texto) # Tensor 64 x 10
     self.resps_A.extend(resposta_a)
-    self.resps_B.extend(resposta_b)
-    #b_distrs = self.mnist_net(b_imgs) # Tensor 64 x 10
 
     # Then execute the reasoning module; the result is a size 19 tensor
-    return self.sum_2(digit_1=resposta_a, digit_2=resposta_b)#, digit_2=b_distrs) # Tensor 64 x 19
+    return self.sum_2(digit_1=resposta_a)#, digit_2=b_distrs) # Tensor 64 x 19
 
   def reset_memory(self):
       self.resps_A = []
@@ -287,23 +265,12 @@ class Trainer():
       self.optimizer.step()
       iter.set_description(f"[Train Epoch {epoch}] Loss: {loss.item():.4f}")
     self.dic['loss_train'] = loss.item()
-    self.dic['concodancia_train'] = self.medir_concordancia()
-
-
-  def medir_concordancia(self):
-    resp_A = self.network.resps_A#[0].max(dim=1, keepdim=False)[1]
-    resp_B = self.network.resps_B#[0].max(dim=1, keepdim=False)[1]
-    args_A = torch.tensor([t.argmax() for t in resp_A])
-    args_B = torch.tensor([t.argmax() for t in resp_B])
-    iguais = (args_A == args_B).sum().item()
-    print( f"Total de concordancias: {iguais}/{len(args_A)} ({iguais/len(args_A):.2f})" )
-    return iguais/len(args_A)
 
   def find_most_common(self, lista):
       most_common = Counter(lista).most_common(1)[0][0]
       return most_common
 
-  def majority_voting(self, y_hat, y, dataset):
+  def majority_voting(self, y, y_hat, dataset):
       assert len(y) == len(y_hat), "Listas de tamanhos diferentes no majority voting"
       majority_y = []
       majority_y_hat = []
@@ -336,7 +303,7 @@ class Trainer():
         #data, target = data.to(device), target#.to(device)
         output = self.network(data).cpu()
         for vetor in output:
-            if (sum(vetor) >1.02) or (sum(vetor)<0.98):
+            if (sum(vetor) >1.02) or (sum(vetor) < 0.98) :
                 print("Soma do vetor: ", sum(vetor))
                 assert True == False
         test_loss += self.loss(output, target).item()
@@ -346,20 +313,22 @@ class Trainer():
         correct += pred.eq(target.data.view_as(pred)).sum()
         perc = 100. * correct / num_items
         QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
-        iter.set_description(f"[{stage} Epoch {epoch}/ {epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
+        iter.set_description(f"[{stage} Epoch {epoch}/{epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
       y, y_hat = self.majority_voting(y, y_hat, dataset_using)
       #assert True == False
       QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
-      print(f"QWK: {QWK:.2f}")
+      print(QWK)
+      #iter.set_description(f"[{stage} Epoch {epoch}/{epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
       if (stage == "validation") and (QWK > self.melhor_QWK_valid):
           self.melhor_QWK_valid = QWK
           self.melhor_iteracao = epoch
           self.tolerance = TOLERANCE
-          print("Vou salvar esse modelo<<<<<<<<<<<<<<<")
+          print("Vou salvar esse modelo <<<<<<<<<<")
           #torch.save(self.network.mnist_net.state_dict(), 'RedeTreinada'+nome_extra+'.pth')
-          print("Modelo salvo")
+          #print(f"Modelo salvo e agora a tolerancia = {self.tolerance} e vai ate a epoch = {epoch+self.tolerance} " )
       if (stage == 'validation') and (self.melhor_iteracao != epoch) and (QWK <= self.melhor_QWK_valid):
           self.tolerance -= 1
+          #print(f"Agora ele tem mais {self.tolerance} chances")
       if (stage.startswith('test')) and (self.melhor_iteracao == epoch):
           self.dic[f'y_{num_test}'] = [t.item() for t in y]
           self.dic[f'y_hat_{num_test}'] = [t.item() for t in y_hat]
@@ -441,7 +410,7 @@ class Trainer():
       epoch += 1
       self.salvar_performance()
     keys = self.lista_performances[1].keys()
-    nome_arquivo = 'performances_loaded_dois_berts'+nome_extra+'.csv'
+    nome_arquivo = 'performances_c2_'+nome_extra+'.csv'
     with open(nome_arquivo, 'w', newline='') as output_file:
         dict_writer = csv.DictWriter(output_file, keys)
         dict_writer.writeheader()
