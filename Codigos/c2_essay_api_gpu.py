@@ -19,7 +19,7 @@ import scallopy
 TOKENIZER_NAME = f"neuralmind/bert-base-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 TOLERANCE = 20
-nome_extra = "_resumido_addmult_allJ"
+nome_extra = "_essay_addmult"
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 class MNISTSum2Dataset(torch.utils.data.Dataset):
   def __init__(
@@ -31,11 +31,11 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     # Contains a MNIST dataset
     self.split_name = split
     if split == "train":
-        self.essays = load_dataset("igorcs/LLM-C3-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
-        self.essays = self._normalizar(self.essays)
+        self.essays = load_dataset("igorcs/LLM-C2-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['train']
+        #self.essays = self._normalizar(self.essays)
     elif split == "test":
-        self.essays = load_dataset("igorcs/LLM-C3-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
-        self.essays = self._normalizar(self.essays)
+        self.essays = load_dataset("igorcs/LLM-C2-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['test']
+        #self.essays = self._normalizar(self.essays)
     elif split in ["test-grade-suba", "test-sub-suba"]:
         self.essays = load_dataset("igorcs/C1-A", trust_remote_code=True)['test']
     elif split in ["test-grade-subb", "test-sub-subb"]:
@@ -43,19 +43,19 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     elif split == "resumido-api":
         self.essays = load_dataset("igorcs/Sabia3ExtractorC1")['train']
     else:
-        self.essays =  self.essays = load_dataset("igorcs/LLM-C3-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
-        self.essays = self._normalizar(self.essays)
+        self.essays =  self.essays = load_dataset("igorcs/LLM-C2-JBCS", cache_dir="tmp/aes_enem", trust_remote_code=True)['validation']
+        #self.essays = self._normalizar(self.essays)
 
   def _normalizar(self, ds):
       df = ds.to_pandas()
       lista_dic = []
       for idx, row in df.iterrows():
           identificacao = f"{row['id']}-{row['id_prompt']}"
-          for j in row['justificativa'][:]:
+          for j in row['justificativa'][:1]:
               dic = {}
               dic['id'] = identificacao
-              dic['justificativa'] = " ".join(row['justificativa'])
-              #dic['justificativa'] = j
+              #dic['justificativa'] = " ".join(row['justificativa'])
+              dic['justificativa'] = j
               dic['label'] = row['label']
               lista_dic.append(dic)
       return Dataset.from_list(lista_dic)
@@ -67,7 +67,7 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
     #(a_img, a_digit) = self.mnist_dataset[self.index_map[idx * 2]]
     #(b_img, b_digit) = self.mnist_dataset[self.index_map[idx * 2 + 1]]
     tokenized_text = tokenizer(
-                self.essays[idx]["justificativa"],
+                self.essays[idx]["essay_text"],
                 return_tensors="pt",
                 truncation=True,
                 padding="max_length",
@@ -174,44 +174,58 @@ def mnist_sum_2_loader(data_dir, batch_size_train, batch_size_test):
 class MNISTNet(nn.Module):
   def __init__(self):
     super(MNISTNet, self).__init__()
-    #self.direcao = AutoModelForSequenceClassification.from_pretrained(
+    self.tema = AutoModelForSequenceClassification.from_pretrained(
+                "neuralmind/bert-base-portuguese-cased",
+                cache_dir="/tmp/aes_enem2",
+                num_labels=3,
+            )
+    
+    self.tipo = AutoModelForSequenceClassification.from_pretrained( 
+                "neuralmind/bert-base-portuguese-cased",
+                cache_dir="/tmp/aes_enem2",
+                num_labels=5,
+            )
+
+    #self.conclusao = AutoModelForSequenceClassification.from_pretrained( 
     #            "neuralmind/bert-base-portuguese-cased",
     #            cache_dir="/tmp/aes_enem2",
     #            num_labels=2,
     #        )
-    
-    self.projeto = AutoModelForSequenceClassification.from_pretrained( 
-                "neuralmind/bert-base-portuguese-cased",
-                cache_dir="/tmp/aes_enem2",
-                num_labels=6,
-            )
 
-    self.desenvolvimento = AutoModelForSequenceClassification.from_pretrained( 
+    self.repertorio = AutoModelForSequenceClassification.from_pretrained( 
                 "neuralmind/bert-base-portuguese-cased",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=4,
             )
 
-    self.contradicao = AutoModelForSequenceClassification.from_pretrained( 
+    self.pertinencia = AutoModelForSequenceClassification.from_pretrained( 
                 "neuralmind/bert-base-portuguese-cased",
                 cache_dir="/tmp/aes_enem2",
-                num_labels=2,
+                num_labels=3,
             )
 
+    #self.produtivo = AutoModelForSequenceClassification.from_pretrained( 
+    #            "neuralmind/bert-base-portuguese-cased",
+    #            cache_dir="/tmp/aes_enem2",
+    #            num_labels=2,
+    #        )
   def forward(self, x):
-    #output1 = self.direcao(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+    output1 = self.tema(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+                        attention_mask=x[2].to(device))
+    output2 = self.tipo(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+                        attention_mask=x[2].to(device))
+    #output3 = self.conclusao(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
     #                    attention_mask=x[2].to(device))
-    output2 = self.projeto(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+    output4 = self.repertorio(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
                         attention_mask=x[2].to(device))
-    output3 = self.desenvolvimento(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+    output5 = self.pertinencia(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
                         attention_mask=x[2].to(device))
-    output4 = self.contradicao(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
-                        attention_mask=x[2].to(device))
+    #output6 = self.produtivo(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
+    #                    attention_mask=x[2].to(device))
      
-    #print( F.softmax(output2.logits, dim=1), F.softmax(output3.logits, dim=1), F.softmax(output4.logits, dim=1))
-    return ( #F.softmax(output1.logits, dim=1),
-            F.softmax(output2.logits, dim=1),
-             F.softmax(output3.logits, dim=1), F.softmax(output4.logits, dim=1))
+    #print(F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1), F.softmax(output4.logits, dim=1), F.softmax(output5.logits, dim=1))#, F.softmax(output6.logits,dim=1))
+    return (F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1), #F.softmax(output3.logits, dim=1), 
+             F.softmax(output4.logits, dim=1), F.softmax(output5.logits, dim=1))#, F.softmax(output6.logits,dim=1))
 
 
 class MNISTSum2Net(nn.Module):
@@ -225,40 +239,46 @@ class MNISTSum2Net(nn.Module):
 
     # Scallop Context
     self.scl_ctx = scallopy.ScallopContext(provenance=provenance, k=k)
-    #self.scl_ctx.add_relation("direcao", int, input_mapping=list(range(2)))
-    self.scl_ctx.add_relation("projeto", int, input_mapping=list(range(6)))
-    self.scl_ctx.add_relation("desenvolvimento", int, input_mapping=list(range(4)))
-    self.scl_ctx.add_relation("contradicao", int, input_mapping=list(range(2)))
+    self.scl_ctx.add_relation("tema", int, input_mapping=list(range(3)))
+    self.scl_ctx.add_relation("tipo", int, input_mapping=list(range(5)))
+    #self.scl_ctx.add_relation("conclusao", int, input_mapping=list(range(2)))
+    self.scl_ctx.add_relation("repertorio", int, input_mapping=list(range(4)))
+    self.scl_ctx.add_relation("pertinencia", int, input_mapping=list(range(3)))
+    self.scl_ctx.add_relation("aux", int)
     #self.scl_ctx.add_relation("produtivo", int, input_mapping=list(range(2)))
     #self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(10)))
-    self.scl_ctx.add_rule("nota(0) :- projeto(0)")
-    self.scl_ctx.add_rule("nota(1) :- projeto(1)")
+    #self.scl_ctx.add_rule("sum_2(0) :- digit_1(0)")
+    self.scl_ctx.add_rule("nota(0) = tema(0)")
+    self.scl_ctx.add_rule("nota(1) = tema(1)")
+    self.scl_ctx.add_rule("nota(1) = tema(2), tipo(0)")
+    self.scl_ctx.add_rule("nota(1) = tema(2), tipo(1)")
     #soma2
-    self.scl_ctx.add_rule("nota(2) :- projeto(2), desenvolvimento(b), b>=0")
-    self.scl_ctx.add_rule("nota(2) :- projeto(a), desenvolvimento(0), a>=3")
-    self.scl_ctx.add_rule("nota(2) :- projeto(a), desenvolvimento(b), contradicao(1), a>=3, b>=1")
+    self.scl_ctx.add_rule("nota(2) = tema(2), tipo(2)")
+    self.scl_ctx.add_rule("nota(2) = tema(2), tipo(a), repertorio(0),  a>=3")
+    #self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
     #soma3
-    self.scl_ctx.add_rule("nota(3) :- projeto(3), desenvolvimento(b), b>=1, contradicao(0)")
-    self.scl_ctx.add_rule("nota(3) :- projeto(a), desenvolvimento(1), a>=4, contradicao(0)") 
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(a), repertorio(1), a>=3")
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(a), repertorio(2), a>=3")
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(a), repertorio(3), pertinencia(0), a>=3")
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(3), repertorio(3), pertinencia(c), c>=1")
     #soma4
-    self.scl_ctx.add_rule("nota(4) :- projeto(4), desenvolvimento(b), b>=2, contradicao(0)") 
-    self.scl_ctx.add_rule("nota(4) :- projeto(a), desenvolvimento(2), a>=5, contradicao(0)") 
+    self.scl_ctx.add_rule("nota(4) = tema(2), tipo(4), repertorio(3), pertinencia(1)")
     #soma5
-    self.scl_ctx.add_rule("nota(5) :- projeto(5), desenvolvimento(3), contradicao(0)") 
+    self.scl_ctx.add_rule("nota(5) = tema(2), tipo(4), repertorio(3), pertinencia(2)")
     # The `sum_2` logical reasoning module
     self.sum_2 = self.scl_ctx.forward_function("nota", output_mapping=[(i,) for i in range(6)])
 
   def forward(self, x: Tuple[torch.Tensor, torch.Tensor]):
     texto = x
     # First recognize the two digits
-    resposta_a, resposta_b, resposta_c = self.mnist_net(texto) # Tensor 64 x 10
+    resposta_a, resposta_b, resposta_d, resposta_e = self.mnist_net(texto) # Tensor 64 x 10
     self.resps_A.extend(resposta_a)
     self.resps_B.extend(resposta_b)
     #b_distrs = self.mnist_net(b_imgs) # Tensor 64 x 10
 
     # Then execute the reasoning module; the result is a size 19 tensor
-    return self.sum_2(projeto=resposta_a, desenvolvimento=resposta_b,
-                      contradicao=resposta_c)#, digit_2=b_distrs) # Tensor 64 x 19
+    return self.sum_2(tema=resposta_a, tipo=resposta_b, #conclusao=resposta_c,
+                      repertorio=resposta_d, pertinencia=resposta_e)#, digit_2=b_distrs) # Tensor 64 x 19
 
   def reset_memory(self):
       self.resps_A = []
@@ -369,7 +389,7 @@ class Trainer():
         perc = 100. * correct / num_items
         QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
         iter.set_description(f"[{stage} Epoch {epoch}/ {epoch+self.tolerance}] Total loss: {test_loss:.4f}, Accuracy: {correct}/{num_items} ({perc:.2f}%) QWK: {QWK:.2f}")
-      y, y_hat = self.majority_voting(y, y_hat, dataset_using)
+      #y, y_hat = self.majority_voting(y, y_hat, dataset_using)
       #assert True == False
       QWK = cohen_kappa_score(y, y_hat, weights='quadratic', labels=[0,1,2,3,4,5])
       print(f"QWK: {QWK:.2f}")
@@ -463,7 +483,7 @@ class Trainer():
       epoch += 1
       self.salvar_performance()
     keys = self.lista_performances[1].keys()
-    nome_arquivo = 'performances_c3_logic'+nome_extra+'.csv'
+    nome_arquivo = 'performances_c2_essay_logic'+nome_extra+'.csv'
     with open(nome_arquivo, 'w', newline='') as output_file:
         dict_writer = csv.DictWriter(output_file, keys)
         dict_writer.writeheader()

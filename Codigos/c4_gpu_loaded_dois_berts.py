@@ -19,7 +19,7 @@ import scallopy
 TOKENIZER_NAME = f"neuralmind/bert-base-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 TOLERANCE = 20
-nome_extra = "_A_k3_20"
+nome_extra = f"_A_k10_{TOLERANCE}-A2BA2"
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 class MNISTSum2Dataset(torch.utils.data.Dataset):
   def __init__(
@@ -157,17 +157,17 @@ class MNISTNet(nn.Module):
   def __init__(self):
     super(MNISTNet, self).__init__()
     self.cohesive = AutoModelForSequenceClassification.from_pretrained(
-                "igorcs/Cohesive-A",
+                "igorcs/Cohesive2-A",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=6,
             )
     self.repetitions = AutoModelForSequenceClassification.from_pretrained(
-                "igorcs/Repetitions-A",#"igorcs/Repetitions-A",
+                "igorcs/Repetitions-B",#"igorcs/Repetitions-A",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=5,
             )
     self.inadequacies = AutoModelForSequenceClassification.from_pretrained(
-                "igorcs/Inadequacies-A",
+                "igorcs/Inadequacies2-A",
                 cache_dir="/tmp/aes_enem2",
                 num_labels=5,
             )
@@ -402,7 +402,7 @@ class Trainer():
         if self.testar_listas(y_3, y_hat_3):
             QWK_3 = cohen_kappa_score(y_3, y_hat_3, weights='quadratic', labels=[0,1])
         else:
-            QWK_3 = 0.0
+            QWK_3 = 1.0
         #print("erro foi no 3")
         iter.set_description(f"[{stage} Epoch {epoch}] Total loss: {test_loss:.4f}, Accuracy:({perc_0:.2f}, {perc_1:.2f}, {perc_2:.2f}, {perc_3:.2f})  QWK: {QWK_0:.2f}, {QWK_1:.2f}, {QWK_2}, {QWK_3}")
       if (stage.startswith('test')) and (self.melhor_iteracao == epoch):
@@ -473,12 +473,12 @@ if __name__ == "__main__":
   # Argument parser
   parser = ArgumentParser("mnist_sum_2")
   parser.add_argument("--n-epochs", type=int, default=2)
-  parser.add_argument("--batch-size-train", type=int, default=2)
-  parser.add_argument("--batch-size-test", type=int, default=64)
+  parser.add_argument("--batch-size-train", type=int, default=1)
+  parser.add_argument("--batch-size-test", type=int, default=1)
   parser.add_argument("--learning-rate", type=float, default=0.000001)
   parser.add_argument("--loss-fn", type=str, default="bce")
   parser.add_argument("--seed", type=int, default=1234)
-  parser.add_argument("--provenance", type=str, default="difftopkproofs")
+  parser.add_argument("--provenance", type=str, default="diffminmaxprob")
   parser.add_argument("--top-k", type=int, default=3)
   args = parser.parse_args()
 

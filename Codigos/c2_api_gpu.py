@@ -19,7 +19,7 @@ import scallopy
 TOKENIZER_NAME = f"neuralmind/bert-base-portuguese-cased"
 tokenizer = AutoTokenizer.from_pretrained(TOKENIZER_NAME)
 TOLERANCE = 20
-nome_extra = "_resumido_addmult_TESTE"
+nome_extra = "_resumido_addmult_firstJ"
 device = "cuda" if torch.accelerator.is_available() else "cpu"
 class MNISTSum2Dataset(torch.utils.data.Dataset):
   def __init__(
@@ -54,7 +54,7 @@ class MNISTSum2Dataset(torch.utils.data.Dataset):
           for j in row['justificativa'][:1]:
               dic = {}
               dic['id'] = identificacao
-              dic['justificativa'] = " ".join(row['justificativa'])
+              #dic['justificativa'] = " ".join(row['justificativa'])
               dic['justificativa'] = j
               dic['label'] = row['label']
               lista_dic.append(dic)
@@ -223,7 +223,7 @@ class MNISTNet(nn.Module):
     #output6 = self.produtivo(input_ids=x[0].to(device), token_type_ids=x[1].to(device), 
     #                    attention_mask=x[2].to(device))
      
-    print(F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1), F.softmax(output4.logits, dim=1), F.softmax(output5.logits, dim=1))#, F.softmax(output6.logits,dim=1))
+    #print(F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1), F.softmax(output4.logits, dim=1), F.softmax(output5.logits, dim=1))#, F.softmax(output6.logits,dim=1))
     return (F.softmax(output1.logits, dim=1), F.softmax(output2.logits, dim=1), #F.softmax(output3.logits, dim=1), 
              F.softmax(output4.logits, dim=1), F.softmax(output5.logits, dim=1))#, F.softmax(output6.logits,dim=1))
 
@@ -244,25 +244,27 @@ class MNISTSum2Net(nn.Module):
     #self.scl_ctx.add_relation("conclusao", int, input_mapping=list(range(2)))
     self.scl_ctx.add_relation("repertorio", int, input_mapping=list(range(4)))
     self.scl_ctx.add_relation("pertinencia", int, input_mapping=list(range(3)))
+    self.scl_ctx.add_relation("aux", int)
     #self.scl_ctx.add_relation("produtivo", int, input_mapping=list(range(2)))
     #self.scl_ctx.add_relation("digit_2", int, input_mapping=list(range(10)))
     #self.scl_ctx.add_rule("sum_2(0) :- digit_1(0)")
-    self.scl_ctx.add_rule("nota(0) :- tema(0)")
-    self.scl_ctx.add_rule("nota(1) :- tema(1) and not tipo(0) and not tipo(1)")
-    self.scl_ctx.add_rule("nota(1) :- not tema(1) and (tipo(0) or tipo(1))")
-
+    self.scl_ctx.add_rule("nota(0) = tema(0)")
+    self.scl_ctx.add_rule("nota(1) = tema(1)")
+    self.scl_ctx.add_rule("nota(1) = tema(2), tipo(0)")
+    self.scl_ctx.add_rule("nota(1) = tema(2), tipo(1)")
     #soma2
-    self.scl_ctx.add_rule("nota(2) :- tema(2), tipo(2)")
-    self.scl_ctx.add_rule("nota(2) :- tema(2), tipo(a), repertorio(0),  a>=3")
+    self.scl_ctx.add_rule("nota(2) = tema(2), tipo(2)")
+    self.scl_ctx.add_rule("nota(2) = tema(2), tipo(a), repertorio(0),  a>=3")
     #self.scl_ctx.add_rule("sum_2(2) :- digit_1(a), digit_2(0), a>=2")
     #soma3
-    self.scl_ctx.add_rule("nota(3) :- tema(2), tipo(3), repertorio(1)")
-    self.scl_ctx.add_rule("nota(3) :- tema(2), tipo(3), repertorio(2)")
-    self.scl_ctx.add_rule("nota(3) :- tema(2), tipo(3), repertorio(3), pertinencia(0)")
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(a), repertorio(1), a>=3")
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(a), repertorio(2), a>=3")
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(a), repertorio(3), pertinencia(0), a>=3")
+    self.scl_ctx.add_rule("nota(3) = tema(2), tipo(3), repertorio(3), pertinencia(c), c>=1")
     #soma4
-    self.scl_ctx.add_rule("nota(4) :- tema(2), tipo(4), repertorio(3), pertinencia(1)")
+    self.scl_ctx.add_rule("nota(4) = tema(2), tipo(4), repertorio(3), pertinencia(1)")
     #soma5
-    self.scl_ctx.add_rule("nota(5) :- tema(2), tipo(4), repertorio(3), pertinencia(2)")
+    self.scl_ctx.add_rule("nota(5) = tema(2), tipo(4), repertorio(3), pertinencia(2)")
     # The `sum_2` logical reasoning module
     self.sum_2 = self.scl_ctx.forward_function("nota", output_mapping=[(i,) for i in range(6)])
 
